@@ -1,5 +1,5 @@
 # CT_TASK_06_POST_PROCESSING
-# Task 7: Post-Processing
+# Task 6: Post-Processing
 
 ### 1. Module Overview
 
