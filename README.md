@@ -26,25 +26,6 @@ The workflow in `post_processing.py` includes:
 7.  **Self-supervised baseline** --- includes a separate masked-voxel
     training experiment that does not require a clean target volume.
 
-## Important limitations
-
--   The generated phantom is a **simplified generated phantom model**,
-    not a realistic anatomical chest CT dataset.
--   Gaussian noise added in the image domain is a simplified noise
-    model. It does not necessarily represent the noise or artifacts in a
-    real CT reconstruction.
--   The supervised model is trained on generated phantom data. Good
-    synthetic test metrics do **not** prove that it will generalize to
-    real reconstructed CT data.
--   Gaussian/median smoothing and neural denoising may blur structures
-    or leave ring and other structured reconstruction artifacts.
--   The script contains multiple experiments and visualization/debugging
-    sections. Run the sections in order and verify the paths and model
-    checkpoints used by each section.
--   Do not report PSNR or SSIM against real data unless a suitable
-    reference/ground-truth volume is available.
--   This project is for experimentation and education, **not clinical
-    use**.
 
 ## Requirements
 
