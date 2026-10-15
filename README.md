@@ -1,63 +1,216 @@
-# CT_TASK_06_POST_PROCESSING
-# Task 6: Post-Processing
+# 3D CT Post-Processing and Denoising
 
-### 1. Module Overview
+> **Research/demo project.** This repository contains code for
+> generating generated 3D CT-like phantom data, training a 3D U-Net
+> denoiser, and experimenting with post-processing on reconstructed
+> volumes. Generated phantom outputs are not clinical CT images and must
+> not be presented as validated medical results.
 
-The post-processing module is responsible for improving the quality of the reconstructed chest CT images produced by the reconstruction module. The main objective is to reduce unwanted noise while preserving important anatomical structures in the reconstructed image.
+## Overview
 
-As the initial post-processing approach, BM3D (Block-Matching and 3D Filtering) is being used as a traditional image-denoising baseline. The current prototype operates on 2D CT slices extracted from the reconstructed CT volume. The denoised results are evaluated against the clean/reference image using image-quality metrics such as PSNR and SSIM. In the later stage, a 3D U-Net can be investigated for processing the complete 3D CT volume.
+The workflow in `post_processing.py` includes:
 
-### 2. Inputs & Outputs
+1.  **Phantom dataset generation** --- creates simplified 3D body,
+    lung-like, and bone-like regions.
+2.  **Noise simulation** --- adds image-domain Gaussian noise to create
+    paired clean/noisy synthetic volumes.
+3.  **Dataset splitting** --- separates volumes into training,
+    validation, and test subsets.
+4.  **3D U-Net training** --- trains a convolutional 3D U-Net using 3D
+    patches.
+5.  **Synthetic evaluation** --- compares predictions with synthetic
+    targets and calculates PSNR and SSIM.
+6.  **Reconstruction experiments** --- includes code paths for running
+    inference on a supplied 3D reconstructed volume, visualizing slices,
+    and saving denoised volumes.
+7.  **Self-supervised baseline** --- includes a separate masked-voxel
+    training experiment that does not require a clean target volume.
 
-- **Inputs:** Reconstructed chest CT image/volume from the Reconstruction module.
-  - 2D slice: `256 × 256` grayscale image
-  - Pixel values are normalized to the range `[0, 1]`
-  - Gaussian noise can be added with a controlled noise level (`sigma`)
-  - For the final implementation, the input will be the reconstructed 3D chest CT volume from CTSim.
+## Important limitations
 
-- **Outputs:** Denoised chest CT image/volume.
-  - BM3D produces a denoised 2D CT slice.
-  - The processed slices can be combined to obtain a denoised 3D volume.
-  - Evaluation metrics include PSNR, SSIM, RMSE and MAE.
+-   The generated phantom is a **simplified generated phantom model**,
+    not a realistic anatomical chest CT dataset.
+-   Gaussian noise added in the image domain is a simplified noise
+    model. It does not necessarily represent the noise or artifacts in a
+    real CT reconstruction.
+-   The supervised model is trained on generated phantom data. Good
+    synthetic test metrics do **not** prove that it will generalize to
+    real reconstructed CT data.
+-   Gaussian/median smoothing and neural denoising may blur structures
+    or leave ring and other structured reconstruction artifacts.
+-   The script contains multiple experiments and visualization/debugging
+    sections. Run the sections in order and verify the paths and model
+    checkpoints used by each section.
+-   Do not report PSNR or SSIM against real data unless a suitable
+    reference/ground-truth volume is available.
+-   This project is for experimentation and education, **not clinical
+    use**.
 
-### 3. Current Progress
+## Requirements
 
-- [x] Loaded chest X-ray/CT image using Python and OpenCV
-- [x] Converted image to grayscale
-- [x] Resized image to `256 × 256`
-- [x] Normalized pixel values to `[0, 1]`
-- [x] Generated controlled Gaussian noise for initial testing
-- [x] Implemented BM3D denoising
-- [x] Displayed clean, noisy and denoised images
-- [x] Implemented PSNR and SSIM evaluation
-- [ ] Test BM3D on multiple reconstructed CT slices
-- [ ] Extend the processing pipeline from 2D slices to the 3D CT volume
-- [ ] Generate clean/noisy paired 3D CTSim data
-- [ ] Implement and evaluate 3D U-Net
-- [ ] Compare BM3D and 3D U-Net
+The script uses Python libraries including:
 
-### 4. How We Will Validate Results
+-   NumPy
+-   PyTorch
+-   Matplotlib
+-   scikit-image
+-   SciPy
+-   IPython / Google Colab utilities
 
-- Check input and output array dimensions.
-- Ensure there are no NaN or infinite values.
-- Check that image intensity values remain within the expected range.
-- Compare the denoised output with the clean/reference CT image.
-- Calculate PSNR to measure pixel-level reconstruction quality.
-- Calculate SSIM to measure structural similarity.
-- Calculate RMSE and MAE to measure reconstruction error.
-- Compare BM3D results with the ML-based denoising model.
-- Verify that important chest anatomical structures are preserved after denoising.
+Install common dependencies in a notebook or environment:
 
-### 5. Code File
+``` bash
+pip install numpy torch matplotlib scikit-image scipy
+```
 
-Our main Python code can be found in this folder under:
+For Google Colab, select a GPU runtime if available. Some code sections
+use Colab's `google.colab.files` upload utility and `/content` paths, so
+they are designed for Colab.
 
-- `bm3d_denoising.ipynb`
+## Phantom dataset configuration
 
-Additional files/code will be added for:
+The dataset generator uses these defaults:
 
-- `data_preparation.ipynb`
-- `3d_unet_training.ipynb`
-- `evaluation.ipynb`
+  Setting                                                   Default
+  ---------------------- ------------------------------------------
+  Number of volumes                                             500
+  Volume shape               `(142, 232, 194)` in `(Z, Y, X)` order
+  Gaussian noise level     `0.04` times the maximum clean intensity
+  Random seed                                                  `42`
+  Output directory                  `/content/ct_denoising_dataset`
+  Train split                                                   70%
+  Validation split                                              15%
+  Test split                                                    15%
+  Saved volume type                                       `float16`
 
-The final implementation will use the reconstructed 3D chest CT volume generated by the CTSim Reconstruction module as the input to the post-processing pipeline.
+The generator creates the following structure:
+
+``` text
+/content/ct_denoising_dataset/
+├── metadata.json
+├── train/
+│   ├── clean/
+│   └── noisy/
+├── val/
+│   ├── clean/
+│   └── noisy/
+└── test/
+    ├── clean/
+    └── noisy/
+```
+
+Each clean volume is paired with a noisy volume of the same filename.
+`metadata.json` records the volume shape, noise model, split counts,
+data type, and random seed.
+
+**Storage warning:** 500 volumes of this size require substantial disk
+space. The script estimates storage and stops if the available Colab
+disk space is insufficient. Reduce `NUM_VOLUMES` or the volume
+dimensions for a quick test.
+
+## Model and training
+
+The supervised model is a 3D U-Net with 3D convolution blocks,
+max-pooling, transposed-convolution upsampling, and skip connections.
+Training uses:
+
+-   Random 3D patches of size `64 × 64 × 64`
+-   Batch size `2`
+-   Adam optimizer
+-   Mean squared error (MSE) loss
+-   Validation loss to select and save the best checkpoint
+
+The supervised checkpoint is saved at:
+
+``` text
+/content/best_ct_unet3d.pth
+```
+
+The script also includes a separate self-supervised 3D U-Net experiment.
+It masks a fraction of voxels in randomly sampled patches and computes a
+loss at the masked locations. Its checkpoint and output paths are:
+
+``` text
+/content/self_supervised_ct_denoiser.pth
+/content/self_supervised_denoised_volume.npy
+```
+
+These are separate experiments; do not assume their weights or outputs
+are interchangeable.
+
+## Running in Google Colab
+
+1.  Upload `post_processing.py` to Colab or copy its code into notebook
+    cells.
+2.  Review the configuration values and available disk space before
+    generating the full generated phantom dataset.
+3.  Run the generated phantom dataset-generation section.
+4.  Inspect a clean/noisy sample to confirm that the generated pairs and
+    shapes are correct.
+5.  Run the supervised 3D U-Net training section and confirm that the
+    checkpoint is saved.
+6.  Review the phantom test metrics and visual comparison.
+7.  If testing a real reconstruction, upload the correct `.npy` volume
+    and verify its shape, axis order, intensity units, and value range
+    first.
+8.  Run only the intended inference section, then inspect the saved
+    output and compare slices using the same display scale.
+
+### Input and output paths used in the script
+
+  ------------------------------------------------------------------------------
+  Purpose                       Path
+  ----------------------------- ------------------------------------------------
+  Phantom dataset \`/           content/ct_denoising_dataset\`
+
+  Supervised model checkpoint   `/content/best_ct_unet3d.pth`
+
+  Example real input volume     `/content/reconstructed_volume.npy`
+
+  Supervised inference output   `/content/denoised_chest_volume_3d.npy`
+
+  Self-supervised checkpoint    `/content/self_supervised_ct_denoiser.pth`
+
+  Self-supervised output        `/content/self_supervised_denoised_volume.npy`
+  ------------------------------------------------------------------------------
+
+Paths may need to be changed to match the actual files in your runtime.
+The script uses more than one reconstruction filename in different
+sections; verify the intended input path before inference.
+
+## Evaluation
+
+For held-out phantom volumes, the code calculates:
+
+-   **PSNR (Peak Signal-to-Noise Ratio):** compares prediction error
+    with the clean phantom target.
+-   **SSIM (Structural Similarity Index):** compares local structural
+    similarity with the clean phantom target.
+
+Metrics should be computed on data not used for training. They measure
+performance on the generated phantom data distribution only. They do not
+establish artifact removal or diagnostic quality on real CT scans.
+
+For real reconstructed volumes without ground truth, use carefully
+controlled visual comparisons, inspect multiple slices and orientations,
+check for changes in intensity statistics, and avoid claiming a
+quantitative improvement based on synthetic metrics.
+
+## Troubleshooting
+
+-   **Dataset generation stops due to disk space:** reduce `NUM_VOLUMES`
+    or test with smaller dimensions.
+-   **`FileNotFoundError`:** confirm that the dataset, input volume, or
+    checkpoint exists at the exact path used by that code section.
+-   **Shape mismatch:** confirm the volume is 3D and that model patch
+    dimensions are compatible with the U-Net pooling/upsampling path.
+-   **Image looks almost black:** inspect percentiles and use a
+    documented, robust display window. Do not change the stored voxel
+    values just to improve visualization.
+-   **Rings or structured patterns remain:** generic denoising may not
+    remove reconstruction artifacts. Investigate the reconstruction
+    geometry, calibration, projections/sinogram, intensity conversion,
+    and axis ordering with the reconstruction team.
+-   **Output looks too smooth:** reduce smoothing strength or reassess
+    model training and data realism; do not assume lower variation means
+    better image quality.
